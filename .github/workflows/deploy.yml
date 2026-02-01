@@ -4,14 +4,23 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: write   # <-- REQUIRED to push gh-pages with GITHUB_TOKEN
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
-      - uses: actions/setup-node@v1
+      - uses: actions/checkout@v4
         with:
-          node-version: 14
-      - run: npm ci && npm run publish
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run publish
         env:
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
