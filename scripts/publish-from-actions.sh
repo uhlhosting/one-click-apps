@@ -1,90 +1,97 @@
 #!/bin/bash
+set -euo pipefail
 
-# FROM:  https://raw.githubusercontent.com/maxheld83/ghpages/master/LICENSE
-# MIT License
+BUILD_DIR="dist"
+SOURCE_DIRECTORY_DEPLOY_GH="${HOME}/temp-gh-deploy-src"
+CLONED_DIRECTORY_DEPLOY_GH="${HOME}/temp-gh-deploy-cloned"
 
-# Copyright (c) 2019 Maximilian Held
+echo "#############################################"
+echo "######### making directories"
+echo "######### $SOURCE_DIRECTORY_DEPLOY_GH"
+echo "######### $CLONED_DIRECTORY_DEPLOY_GH"
+echo "#############################################"
 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
+rm -rf "$SOURCE_DIRECTORY_DEPLOY_GH" "$CLONED_DIRECTORY_DEPLOY_GH"
+mkdir -p "$SOURCE_DIRECTORY_DEPLOY_GH" "$CLONED_DIRECTORY_DEPLOY_GH"
 
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
+echo "#############################################"
+echo "######### Setting env vars"
+echo "#############################################"
 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
+: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required (e.g. owner/repo)}"
 
-
-set -e
-
-BUILD_DIR=dist
-SOURCE_DIRECTORY_DEPLOY_GH=~/temp-gh-deploy-src
-CLONED_DIRECTORY_DEPLOY_GH=~/temp-gh-deploy-cloned
-
-echo "#############################################" 
-echo "######### making directories" 
-echo "######### $SOURCE_DIRECTORY_DEPLOY_GH" 
-echo "######### $CLONED_DIRECTORY_DEPLOY_GH" 
-echo "#############################################" 
-
-mkdir -p $SOURCE_DIRECTORY_DEPLOY_GH
-mkdir -p $CLONED_DIRECTORY_DEPLOY_GH
-
-echo "#############################################" 
-echo "######### Setting env vars" 
-echo "#############################################" 
-
-REMOTE_REPO="https://${GITHUB_PERSONAL_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-REPONAME="$(echo $GITHUB_REPOSITORY| cut -d'/' -f 2)"
-
-OWNER="$(echo $GITHUB_REPOSITORY| cut -d'/' -f 1)" 
+OWNER="${GITHUB_REPOSITORY%%/*}"
+REPONAME="${GITHUB_REPOSITORY##*/}"
 GHIO="${OWNER}.github.io"
+
 if [[ "$REPONAME" == "$GHIO" ]]; then
   REMOTE_BRANCH="master"
 else
   REMOTE_BRANCH="gh-pages"
-fi 
-sleep 1s
-echo "#############################################" 
-echo "######### CLONING REMOTE_BRANCH: $REMOTE_BRANCH" 
-echo "#############################################" 
+fi
 
+# Repo URL: use token if present (CI), otherwise use plain https (local git credential helper can handle auth)
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  REMOTE_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+else
+  REMOTE_REPO="https://github.com/${GITHUB_REPOSITORY}.git"
+fi
 
-cp -r $BUILD_DIR $SOURCE_DIRECTORY_DEPLOY_GH/
-git clone --single-branch --branch=$REMOTE_BRANCH $REMOTE_REPO $CLONED_DIRECTORY_DEPLOY_GH
-sleep 1s
-echo "#############################################" 
-echo "######### Removing old files" 
-echo "#############################################" 
-cd $CLONED_DIRECTORY_DEPLOY_GH && git rm -rf . && git clean -fdx 
-sleep 1s
-echo "#############################################" 
-echo "######### Copying files" 
-echo "#############################################" 
-cp -r $SOURCE_DIRECTORY_DEPLOY_GH/$BUILD_DIR $CLONED_DIRECTORY_DEPLOY_GH/$BUILD_DIR 
-mv $CLONED_DIRECTORY_DEPLOY_GH/.git $CLONED_DIRECTORY_DEPLOY_GH/$BUILD_DIR/ 
-cd $CLONED_DIRECTORY_DEPLOY_GH/$BUILD_DIR/ 
-sleep 1s
-echo "#############################################" 
-echo "######### Content pre-commit ###" 
-echo "#############################################" 
-ls -la
-echo "#############################################" 
-echo "######### Commit and push ###" 
-echo "#############################################" 
-sleep 1s
-git config user.name "${GITHUB_ACTOR}"
-git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
-echo `date` >> forcebuild.date
-git add -A 
-git commit -m 'Deploy to GitHub Pages' 
-git push $REMOTE_REPO $REMOTE_BRANCH:$REMOTE_BRANCH 
+echo "Repo: $GITHUB_REPOSITORY"
+echo "Branch to deploy: $REMOTE_BRANCH"
+echo "Build dir: $BUILD_DIR"
+
+if [[ ! -d "$BUILD_DIR" ]]; then
+  echo "ERROR: Build directory '$BUILD_DIR' does not exist. Did the build run?"
+  exit 1
+fi
+
+echo "#############################################"
+echo "######### Copy build output"
+echo "#############################################"
+cp -R "$BUILD_DIR" "$SOURCE_DIRECTORY_DEPLOY_GH/"
+
+echo "#############################################"
+echo "######### Clone or init deploy branch"
+echo "#############################################"
+
+# Try to clone the branch; if it doesn't exist, init an orphan branch
+if git ls-remote --exit-code --heads "$REMOTE_REPO" "$REMOTE_BRANCH" >/dev/null 2>&1; then
+  git clone --single-branch --branch="$REMOTE_BRANCH" "$REMOTE_REPO" "$CLONED_DIRECTORY_DEPLOY_GH"
+else
+  git clone "$REMOTE_REPO" "$CLONED_DIRECTORY_DEPLOY_GH"
+  cd "$CLONED_DIRECTORY_DEPLOY_GH"
+  git checkout --orphan "$REMOTE_BRANCH"
+  git rm -rf . >/dev/null 2>&1 || true
+fi
+
+echo "#############################################"
+echo "######### Replace contents"
+echo "#############################################"
+
+cd "$CLONED_DIRECTORY_DEPLOY_GH"
+git rm -rf . >/dev/null 2>&1 || true
+git clean -fdx
+
+cp -R "${SOURCE_DIRECTORY_DEPLOY_GH}/${BUILD_DIR}" "./${BUILD_DIR}"
+
+cd "$CLONED_DIRECTORY_DEPLOY_GH"
+git config user.name "${GITHUB_ACTOR:-github-actions}"
+git config user.email "${GITHUB_ACTOR:-github-actions}@users.noreply.github.com"
+
+echo "#############################################"
+echo "######### Commit and push"
+echo "#############################################"
+
+# Tiny change to ensure Pages rebuild if needed
+date -u +"%Y-%m-%dT%H:%M:%SZ" > forcebuild.date
+
+git add -A
+
+if git diff --cached --quiet; then
+  echo "No changes to deploy. Exiting cleanly."
+  exit 0
+fi
+
+git commit -m "Deploy to GitHub Pages"
+git push "$REMOTE_REPO" "$REMOTE_BRANCH:$REMOTE_BRANCH"
